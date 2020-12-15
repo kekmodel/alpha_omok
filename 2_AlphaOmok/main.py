@@ -20,29 +20,29 @@ from env import env_small as game
 
 logging.basicConfig(
     filename='logs/log_{}.txt'.format(datetime.now().strftime('%y%m%d')),
-    level=logging.WARNING)
+    level=logging.INFO)
 
 # Game
 BOARD_SIZE = game.Return_BoardParams()[0]
-N_MCTS = 400
+N_MCTS = 200
 TAU_THRES = 6
-SEED = 0
+SEED = 5
 PRINT_SELFPLAY = True
 
 # Net
-N_BLOCKS = 10
+N_BLOCKS = 18
 IN_PLANES = 5  # history * 2 + 1
-OUT_PLANES = 128
+OUT_PLANES = 256
 
 # Training
-USE_TENSORBOARD = False
-N_SELFPLAY = 100
-TOTAL_ITER = 10000000
-MEMORY_SIZE = 30000
+USE_TENSORBOARD = True
+# N_SELFPLAY = 100
+TOTAL_ITER = 1000
+MEMORY_SIZE = 4000
 N_EPOCHS = 1
 BATCH_SIZE = 32
-LR = 2e-4
-L2 = 0
+LR = 6e-4
+L2 = 1e-4
 
 # Hyperparameter sharing
 agents.PRINT_MCTS = PRINT_SELFPLAY
@@ -63,7 +63,7 @@ if use_cuda:
     torch.cuda.manual_seed_all(SEED)
 
 # Global variables
-rep_memory = deque(maxlen=MEMORY_SIZE)
+rep_memory = []
 cur_memory = deque()
 step = 0
 start_iter = 0
@@ -71,20 +71,29 @@ total_epoch = 0
 result = {'Black': 0, 'White': 0, 'Draw': 0}
 if USE_TENSORBOARD:
     from tensorboardX import SummaryWriter
-    Writer = SummaryWriter()
+    writer = SummaryWriter()
 
 # Initialize agent & model
-Agent = agents.ZeroAgent(BOARD_SIZE,
+agent = agents.ZeroAgent(BOARD_SIZE,
                          N_MCTS,
                          IN_PLANES,
                          noise=True)
-Agent.model = model.PVNet(N_BLOCKS,
+agent.model = model.PVNet(N_BLOCKS,
                           IN_PLANES,
                           OUT_PLANES,
                           BOARD_SIZE).to(device)
-optimizer = optim.Adam(Agent.model.parameters(), lr=LR, weight_decay=L2, eps=1e-6)
+no_decay = ['bn', 'bias']
+model_parameters = [
+    {'params': [p for n, p in agent.model.named_parameters() if not any(
+        nd in n for nd in no_decay)], 'weight_decay': L2},
+    {'params': [p for n, p in agent.model.named_parameters() if any(
+        nd in n for nd in no_decay)], 'weight_decay': 0.0}
+]
+optimizer = optim.SGD(model_parameters, momentum=0.9, lr=LR)
+scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, TOTAL_ITER)
+# optimizer = optim.Adam(Agent.model.parameters(), lr=LR, eps=1e-6)
 
-logging.warning(
+logging.info(
     '\nCUDA: {}'
     '\nAGENT: {}'
     '\nMODEL: {}'
@@ -95,15 +104,15 @@ logging.warning(
     '\nN_BLOCKS: {}'
     '\nIN_PLANES: {}'
     '\nOUT_PLANES: {}'
-    '\nN_SELFPLAY: {}'
+    # '\nN_SELFPLAY: {}'
     '\nMEMORY_SIZE: {}'
     '\nN_EPOCHS: {}'
     '\nBATCH_SIZE: {}'
     '\nLR: {}'
     '\nL2: {}'.format(
         use_cuda,
-        type(Agent).__name__,
-        type(Agent.model).__name__,
+        type(agent).__name__,
+        type(agent.model).__name__,
         SEED,
         BOARD_SIZE,
         N_MCTS,
@@ -111,7 +120,7 @@ logging.warning(
         N_BLOCKS,
         IN_PLANES,
         OUT_PLANES,
-        N_SELFPLAY,
+        # N_SELFPLAY,
         MEMORY_SIZE,
         N_EPOCHS,
         BATCH_SIZE,
@@ -119,19 +128,16 @@ logging.warning(
         L2))
 
 
-def self_play(n_selfplay):
-    global cur_memory, rep_memory
-    global Agent
-
-    Agent.model.eval()
+def self_play(agent, cur_memory, rep_memory):
+    agent.model.eval()
     state_black = deque()
     state_white = deque()
     pi_black = deque()
     pi_white = deque()
-
-    for episode in range(n_selfplay):
+    episode = 0
+    while True:
         if (episode + 1) % 10 == 0:
-            logging.warning('Playing Episode {:3}'.format(episode + 1))
+            logging.info('Playing Episode {:3}'.format(episode + 1))
 
         env = game.GameState('text')
         board = np.zeros((BOARD_SIZE, BOARD_SIZE), 'float')
@@ -152,7 +158,7 @@ def self_play(n_selfplay):
             else:
                 tau = 0
 
-            pi = Agent.get_pi(root_id, tau)
+            pi = agent.get_pi(root_id, tau)
 
             # ===================== collect samples ======================== #
 
@@ -175,16 +181,12 @@ def self_play(n_selfplay):
             if PRINT_SELFPLAY:
                 with torch.no_grad():
                     state_input = torch.tensor([state]).to(device).float()
-                    p, v = Agent.model(state_input)
+                    p, v = agent.model(state_input)
                     p = p.cpu().numpy()[0]
                     v = v.item()
 
-                    print('\nPi:\n{}'.format(
-                        pi.reshape(BOARD_SIZE, BOARD_SIZE).round(decimals=2)
-                    ))
-                    print('\nPolicy:\n{}'.format(
-                        p.reshape(BOARD_SIZE, BOARD_SIZE).round(decimals=2)
-                    ))
+                    print('\nPi:\n{}'.format(pi.reshape(BOARD_SIZE, BOARD_SIZE).round(decimals=2)))
+                    print('\nPolicy:\n{}'.format(p.reshape(BOARD_SIZE, BOARD_SIZE).round(decimals=2)))
 
                 if turn == 0:
                     print("\nBlack's win%: {:.2f}%".format((v + 1) / 2 * 100))
@@ -244,164 +246,158 @@ def self_play(n_selfplay):
                               bw, ww, dr,
                               (bw + 0.5 * dr) / (bw + ww + dr) * 100))
                     print('current memory size:', len(cur_memory))
+                episode += 1
+                agent.reset()
+                if len(cur_memory) >= MEMORY_SIZE:
+                    rep_memory.extend(utils.augment_dataset(cur_memory, BOARD_SIZE))
+                    return
 
-                Agent.reset()
 
-    rep_memory.extend(utils.augment_dataset(cur_memory, BOARD_SIZE))
+def train(agent, rep_memory, optimizer, scheduler):
+    global step, total_epoch, writer
 
-
-def train(n_epochs, n_iter):
-    global step, total_epoch
-    global Agent, optimizer, Writer
-    global rep_memory, cur_memory
-
-    Agent.model.train()
+    agent.model.train()
     loss_all = []
     loss_v = []
     loss_p = []
-    train_memory = []
-    train_memory.extend(
-        random.sample(rep_memory, BATCH_SIZE * len(cur_memory)))
+    # train_memory = []
+    # train_memory.extend(
+    #     random.sample(rep_memory, BATCH_SIZE * len(cur_memory)))
 
-    dataloader = DataLoader(train_memory,
+    dataloader = DataLoader(rep_memory,
                             batch_size=BATCH_SIZE,
-                            shuffle=False,
+                            shuffle=True,
                             pin_memory=use_cuda)
 
     print('=' * 58)
     print(' ' * 20 + ' Start Learning ' + ' ' * 20)
     print('=' * 58)
-    print('current memory size:', len(cur_memory))
+    # print('current memory size:', len(cur_memory))
     print('replay memory size:', len(rep_memory))
-    print('train memory size:', len(train_memory))
+    # print('train memory size:', len(train_memory))
     print('optimizer: {}'.format(optimizer))
-    logging.warning('=' * 58)
-    logging.warning(' ' * 20 + ' Start Learning ' + ' ' * 20)
-    logging.warning('=' * 58)
-    logging.warning('current memory size: {}'.format(len(cur_memory)))
-    logging.warning('replay memory size: {}'.format(len(rep_memory)))
-    logging.warning('train memory size: {}'.format(len(train_memory)))
-    logging.warning('optimizer: {}'.format(optimizer))
+    logging.info('=' * 58)
+    logging.info(' ' * 20 + ' Start Learning ' + ' ' * 20)
+    logging.info('=' * 58)
+    # logging.info('current memory size: {}'.format(len(cur_memory)))
+    logging.info('replay memory size: {}'.format(len(rep_memory)))
+    # logging.info('train memory size: {}'.format(len(train_memory)))
+    logging.info('optimizer: {}'.format(optimizer))
 
-    for epoch in range(n_epochs):
-        for i, (s, pi, z) in enumerate(dataloader):
-            s_batch = s.to(device).float()
-            pi_batch = pi.to(device).float()
-            z_batch = z.to(device).float()
+    for s, pi, z in dataloader:
+        s_batch = s.to(device).float()
+        pi_batch = pi.to(device).float()
+        z_batch = z.to(device).float()
 
-            p_batch, v_batch = Agent.model(s_batch)
+        p_batch, v_batch = agent.model(s_batch)
 
-            v_loss = (v_batch - z_batch).pow(2).mean()
-            p_loss = -(pi_batch * p_batch.log()).sum(dim=-1).mean()
-            loss = v_loss + p_loss
-
-            if PRINT_SELFPLAY:
-                loss_v.append(v_loss.item())
-                loss_p.append(p_loss.item())
-                loss_all.append(loss.item())
-
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-
-            step += 1
-
-            if USE_TENSORBOARD:
-                Writer.add_scalar('Loss', loss.item(), step)
-                Writer.add_scalar('Loss V', v_loss.item(), step)
-                Writer.add_scalar('Loss P', p_loss.item(), step)
-
-            if PRINT_SELFPLAY:
-                print('{:4} Step Loss: {:.4f}   '
-                      'Loss V: {:.4f}   '
-                      'Loss P: {:.4f}'.format(step,
-                                              loss.item(),
-                                              v_loss.item(),
-                                              p_loss.item()))
-        total_epoch += 1
+        v_loss = (v_batch - z_batch).pow(2).mean()
+        p_loss = -(pi_batch * p_batch.log()).sum(dim=-1).mean()
+        loss = v_loss + p_loss
 
         if PRINT_SELFPLAY:
-            print('-' * 58)
-            print('{:2} Epoch Loss: {:.4f}   '
-                  'Loss V: {:.4f}   '
-                  'Loss P: {:.4f}'.format(total_epoch,
-                                          np.mean(loss_all),
-                                          np.mean(loss_v),
-                                          np.mean(loss_p)))
-        logging.warning('{:2} Epoch Loss: {:.4f}   '
-                        'Loss_V: {:.4f}   '
-                        'Loss_P: {:.4f}'.format(total_epoch,
-                                                np.mean(loss_all),
-                                                np.mean(loss_v),
-                                                np.mean(loss_p)))
+            loss_v.append(v_loss.item())
+            loss_p.append(p_loss.item())
+            loss_all.append(loss.item())
+
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+        step += 1
+
+        if USE_TENSORBOARD:
+            writer.add_scalar('Loss', loss.item(), step)
+            writer.add_scalar('Loss_V', v_loss.item(), step)
+            writer.add_scalar('Loss_P', p_loss.item(), step)
+
+        if PRINT_SELFPLAY:
+            print('{:4} Step Loss: {:.4f}   '
+                    'Loss V: {:.4f}   '
+                    'Loss P: {:.4f}'.format(step,
+                                            loss.item(),
+                                            v_loss.item(),
+                                            p_loss.item()))
+    scheduler.step()
+    total_epoch += 1
+
+    if PRINT_SELFPLAY:
+        print('-' * 58)
+        print('{:2} Epoch Loss: {:.4f}   '
+                'Loss V: {:.4f}   '
+                'Loss P: {:.4f}'.format(total_epoch,
+                                        np.mean(loss_all),
+                                        np.mean(loss_v),
+                                        np.mean(loss_p)))
+    logging.info('{:2} Epoch Loss: {:.4f}   '
+                    'Loss_V: {:.4f}   '
+                    'Loss_P: {:.4f}'.format(total_epoch,
+                                            np.mean(loss_all),
+                                            np.mean(loss_v),
+                                            np.mean(loss_p)))
 
 
-def save_model(agent, n_iter, step):
-    torch.save(
-        agent.model.state_dict(),
-        'data/{}_{}_{}_step_model.pickle'.format(datetime_now, n_iter, step))
+def save_model(agent, datetime, n_iter, step):
+    torch.save(agent.model.state_dict(),
+        'data/{}_{}_{}_step_model.pickle'.format(datetime, n_iter, step))
 
 
-def save_dataset(memory, n_iter, step):
-    with open('data/{}_{}_{}_step_dataset.pickle'.format(
-            datetime_now, n_iter, step), 'wb') as f:
+def save_dataset(memory, datetime, n_iter, step):
+    with open('data/{}_{}_{}_step_dataset.pickle'.format(datetime, n_iter, step), 'wb') as f:
         pickle.dump(memory, f, pickle.HIGHEST_PROTOCOL)
 
 
-def load_data(model_path, dataset_path):
-    global rep_memory, step, start_iter
-    if model_path:
+def load_data(agent, rep_memory, model_path, dataset_path):
+    global step, start_iter
+    if model_path is not None:
         print('load model: {}'.format(model_path))
-        logging.warning('load model: {}'.format(model_path))
-        state = Agent.model.state_dict()
+        logging.info('load model: {}'.format(model_path))
+        state = agent.model.state_dict()
         state.update(torch.load(model_path))
-        Agent.model.load_state_dict(state)
+        agent.model.load_state_dict(state)
         step = int(model_path.split('_')[2])
         start_iter = int(model_path.split('_')[1]) + 1
-    if dataset_path:
+    if dataset_path is not None:
         print('load dataset: {}'.format(dataset_path))
-        logging.warning('load dataset: {}'.format(dataset_path))
+        logging.info('load dataset: {}'.format(dataset_path))
         with open(dataset_path, 'rb') as f:
-            rep_memory = deque(pickle.load(f), maxlen=MEMORY_SIZE)
+            rep_memory = pickle.load(f)
 
 
-def reset_iter(result, cur_memory):
-    global total_epoch
+def reset_iter(result, cur_memory, rep_memory):
     result['Black'] = 0
     result['White'] = 0
     result['Draw'] = 0
-    total_epoch = 0
     cur_memory.clear()
+    rep_memory.clear()
 
 
-if __name__ == '__main__':
-
+def main():
     # ====================== self-play & training ====================== #
-
     model_path = None
     dataset_path = None
-
-    load_data(model_path, dataset_path)
+    if model_path is not None:
+        load_data(agent, rep_memory, model_path, dataset_path)
 
     for n_iter in range(start_iter, TOTAL_ITER):
         print('=' * 58)
         print(' ' * 20 + '  {:2} Iteration  '.format(n_iter) + ' ' * 20)
         print('=' * 58)
-        logging.warning(datetime.now().isoformat())
-        logging.warning('=' * 58)
-        logging.warning(
-            ' ' * 20 + "  {:2} Iteration  ".format(n_iter) + ' ' * 20)
-        logging.warning('=' * 58)
-
+        logging.info(datetime.now().isoformat())
+        logging.info('=' * 58)
+        logging.info(' ' * 20 + "  {:2} Iteration  ".format(n_iter) + ' ' * 20)
+        logging.info('=' * 58)
         datetime_now = datetime.now().strftime('%y%m%d')
-        if n_iter > 0:
-            N_SELFPLAY = 1
-            self_play(N_SELFPLAY)
-            train(N_EPOCHS, n_iter)
-        else:
-            self_play(N_SELFPLAY)
 
-        if n_iter % 100 == 0:
-            save_model(Agent, n_iter + 100, step)
-            save_dataset(rep_memory, n_iter + 100, step)
-        reset_iter(result, cur_memory)
+        self_play(agent, cur_memory, rep_memory)
+    
+        train(agent, rep_memory, optimizer, scheduler)
+
+        save_model(agent, datetime_now, n_iter, step)
+        save_dataset(rep_memory, datetime_now, n_iter, step)
+        
+        reset_iter(result, cur_memory, rep_memory)
+
+
+if __name__ == '__main__':
+    main()

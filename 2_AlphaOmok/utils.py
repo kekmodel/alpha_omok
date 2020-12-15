@@ -236,4 +236,5 @@ def augment_dataset(memory, board_size):
             pi_flip = np.fliplr(pi_rot).flatten().copy()
             aug_dataset.append((s_flip, pi_flip, z))
 
+
     return aug_dataset
