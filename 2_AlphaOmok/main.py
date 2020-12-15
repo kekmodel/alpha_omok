@@ -41,7 +41,7 @@ OUT_PLANES = 256
 
 # Training
 USE_TENSORBOARD = False
-N_PROCESS = 4
+N_PROCESS = 2
 TOTAL_ITER = 1000
 MEMORY_SIZE = 4000 // N_PROCESS
 BATCH_SIZE = 32
@@ -346,7 +346,7 @@ def save_dataset(memory, datetime, n_iter, step):
         pickle.dump(memory, f, pickle.HIGHEST_PROTOCOL)
 
 
-def load_model(agent, optimizer, scheduler, rep_memory, model_path, dataset_path):
+def load_model(agent, optimizer, scheduler, model_path):
     global step, start_iter
     if model_path is not None:
         print('load model: {}'.format(model_path))
@@ -358,25 +358,19 @@ def load_model(agent, optimizer, scheduler, rep_memory, model_path, dataset_path
         scheduler.load_state_dict(torch.load(model_path)['scheduler'])
         step = int(model_path.split('_')[2])
         start_iter = int(model_path.split('_')[1]) + 1
-    if dataset_path is not None:
-        print('load dataset: {}'.format(dataset_path))
-        logging.info('load dataset: {}'.format(dataset_path))
-        with open(dataset_path, 'rb') as f:
-            rep_memory = pickle.load(f)
 
 
 def reset_iter(result):
     result['Black'] = 0
     result['White'] = 0
     result['Draw'] = 0
-    # cur_memory.clear()
-    # rep_memory.clear()
 
 
 def main():
     # ====================== self-play & training ====================== #
     model_path = None
-    dataset_path = None
+    if model_path is not None:
+        load_model(agent, optimizer, scheduler, model_path)
 
     for n_iter in range(start_iter, TOTAL_ITER):
         print('=' * 58)
@@ -389,8 +383,6 @@ def main():
         datetime_now = datetime.now().strftime('%y%m%d')
         train_memory = []
         cur_memory = deque()
-        if model_path is not None:
-            load_model(agent, optimizer, scheduler, train_memory, model_path, dataset_path)
 
         with futures.ProcessPoolExecutor(max_workers=N_PROCESS) as executor:
             fs = [executor.submit(self_play, agent, cur_memory, i) for i in range(N_PROCESS)]
@@ -400,7 +392,7 @@ def main():
         train(agent, train_memory, optimizer, scheduler)
 
         save_model(agent, optimizer, scheduler, datetime_now, n_iter, step)
-        # save_dataset(train_memory, datetime_now, n_iter, step)
+        save_dataset(train_memory, datetime_now, n_iter, step)
 
         reset_iter(result)
 
