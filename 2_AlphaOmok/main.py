@@ -31,7 +31,7 @@ mp.set_start_method('spawn', force=True)
 BOARD_SIZE = game.Return_BoardParams()[0]
 N_MCTS = 200
 TAU_THRES = 6
-SEED = 5
+# SEED = 5
 PRINT_SELFPLAY = True
 
 # Net
@@ -41,10 +41,9 @@ OUT_PLANES = 256
 
 # Training
 USE_TENSORBOARD = False
-# N_SELFPLAY = 100
+N_PROCESS = 4
 TOTAL_ITER = 1000
-MEMORY_SIZE = 10
-N_EPOCHS = 1
+MEMORY_SIZE = 4000 // N_PROCESS
 BATCH_SIZE = 32
 LR = 6e-4
 L2 = 1e-4
@@ -102,32 +101,26 @@ logging.info(
     '\nCUDA: {}'
     '\nAGENT: {}'
     '\nMODEL: {}'
-    '\nSEED: {}'
     '\nBOARD_SIZE: {}'
     '\nN_MCTS: {}'
     '\nTAU_THRES: {}'
     '\nN_BLOCKS: {}'
     '\nIN_PLANES: {}'
     '\nOUT_PLANES: {}'
-    # '\nN_SELFPLAY: {}'
     '\nMEMORY_SIZE: {}'
-    '\nN_EPOCHS: {}'
     '\nBATCH_SIZE: {}'
     '\nLR: {}'
     '\nL2: {}'.format(
         use_cuda,
         type(agent).__name__,
         type(agent.model).__name__,
-        SEED,
         BOARD_SIZE,
         N_MCTS,
         TAU_THRES,
         N_BLOCKS,
         IN_PLANES,
         OUT_PLANES,
-        # N_SELFPLAY,
         MEMORY_SIZE,
-        N_EPOCHS,
         BATCH_SIZE,
         LR,
         L2))
@@ -341,9 +334,11 @@ def train(agent, rep_memory, optimizer, scheduler):
                                          np.mean(loss_p)))
 
 
-def save_model(agent, datetime, n_iter, step):
-    torch.save(agent.model.state_dict(),
-               'data/{}_{}_{}_step_model.pickle'.format(datetime, n_iter, step))
+def save_model(agent, optimizer, scheduler, datetime, n_iter, step):
+    tar = {'state_dict': agent.model.state_dict(),
+           'optimizer': optimizer.state_dict(),
+           'scheduler': scheduler.state_dict()}
+    torch.save(tar, 'data/{}_{}_{}_step_model.pickle'.format(datetime, n_iter, step))
 
 
 def save_dataset(memory, datetime, n_iter, step):
@@ -351,14 +346,16 @@ def save_dataset(memory, datetime, n_iter, step):
         pickle.dump(memory, f, pickle.HIGHEST_PROTOCOL)
 
 
-def load_data(agent, rep_memory, model_path, dataset_path):
+def load_model(agent, optimizer, scheduler, rep_memory, model_path, dataset_path):
     global step, start_iter
     if model_path is not None:
         print('load model: {}'.format(model_path))
         logging.info('load model: {}'.format(model_path))
         state = agent.model.state_dict()
-        state.update(torch.load(model_path))
+        state.update(torch.load(model_path)['state_dict'])
         agent.model.load_state_dict(state)
+        optimizer.load_state_dict(torch.load(model_path)['optimizer'])
+        scheduler.load_state_dict(torch.load(model_path)['scheduler'])
         step = int(model_path.split('_')[2])
         start_iter = int(model_path.split('_')[1]) + 1
     if dataset_path is not None:
@@ -393,17 +390,17 @@ def main():
         train_memory = []
         cur_memory = deque()
         if model_path is not None:
-            load_data(agent, train_memory, model_path, dataset_path)
+            load_model(agent, optimizer, scheduler, train_memory, model_path, dataset_path)
 
-        with futures.ProcessPoolExecutor(max_workers=4) as executor:
-            fs = [executor.submit(self_play, agent, cur_memory, i) for i in range(4)]
+        with futures.ProcessPoolExecutor(max_workers=N_PROCESS) as executor:
+            fs = [executor.submit(self_play, agent, cur_memory, i) for i in range(N_PROCESS)]
             for f in futures.as_completed(fs):
                 train_memory.extend(f.result())
 
         train(agent, train_memory, optimizer, scheduler)
 
-        save_model(agent, datetime_now, n_iter, step)
-        save_dataset(train_memory, datetime_now, n_iter, step)
+        save_model(agent, optimizer, scheduler, datetime_now, n_iter, step)
+        # save_dataset(train_memory, datetime_now, n_iter, step)
 
         reset_iter(result)
 
