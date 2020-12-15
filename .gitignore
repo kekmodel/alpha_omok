@@ -1,9 +1,11 @@
 .DS_Store
+.ipynb_checkpoints
 __pycache__
 *.pickle
 venv3
 *.pyc
 runs
+results
 *.txt
 models
 .vscode
