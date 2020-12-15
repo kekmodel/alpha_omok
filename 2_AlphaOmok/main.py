@@ -316,14 +316,8 @@ def reset_iter(result):
 
 def main():
     # Initialize agent & model
-    agent = agents.ZeroAgent(BOARD_SIZE,
-                             N_MCTS,
-                             IN_PLANES,
-                             noise=True)
-    agent.model = model.PVNet(N_BLOCKS,
-                              IN_PLANES,
-                              OUT_PLANES,
-                              BOARD_SIZE).to(device)
+    agent = agents.ZeroAgent(BOARD_SIZE, N_MCTS, IN_PLANES, noise=True)
+    agent.model = model.PVNet(N_BLOCKS, IN_PLANES, OUT_PLANES, BOARD_SIZE).to(device)
     agent.model.share_memory()
 
     no_decay = ['bn', 'bias']
@@ -335,35 +329,22 @@ def main():
     ]
     optimizer = optim.SGD(model_parameters, momentum=0.9, lr=LR)
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, TOTAL_ITER)
-    # optimizer = optim.Adam(Agent.model.parameters(), lr=LR, eps=1e-6)
 
     logging.info(
-        '\nCUDA: {}'
-        '\nAGENT: {}'
-        '\nMODEL: {}'
-        '\nBOARD_SIZE: {}'
-        '\nN_MCTS: {}'
-        '\nTAU_THRES: {}'
-        '\nN_BLOCKS: {}'
-        '\nIN_PLANES: {}'
-        '\nOUT_PLANES: {}'
-        '\nMEMORY_SIZE: {}'
-        '\nBATCH_SIZE: {}'
-        '\nLR: {}'
-        '\nL2: {}'.format(
-            use_cuda,
-            type(agent).__name__,
-            type(agent.model).__name__,
-            BOARD_SIZE,
-            N_MCTS,
-            TAU_THRES,
-            N_BLOCKS,
-            IN_PLANES,
-            OUT_PLANES,
-            MEMORY_SIZE,
-            BATCH_SIZE,
-            LR,
-            L2))
+        f'\nCUDA: {use_cuda}'
+        f'\nAGENT: {type(agent).__name__}'
+        f'\nMODEL: {agent.model}'
+        f'\nBOARD_SIZE: {BOARD_SIZE}'
+        f'\nN_MCTS: {N_MCTS}'
+        f'\nTAU_THRES: {TAU_THRES}'
+        f'\nN_BLOCKS: {N_BLOCKS}'
+        f'\nIN_PLANES: {IN_PLANES}'
+        f'\nOUT_PLANES: {OUT_PLANES}'
+        f'\nTOTAL_ITER: {TOTAL_ITER}'
+        f'\nMEMORY_SIZE: {MEMORY_SIZE}'
+        f'\nBATCH_SIZE: {BATCH_SIZE}'
+        f'\nLR: {LR}'
+        f'\nL2: {L2}')
 
     # ====================== self-play & training ====================== #
     model_path = None
