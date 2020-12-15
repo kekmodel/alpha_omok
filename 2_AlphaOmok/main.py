@@ -21,11 +21,9 @@ import agents
 from env import env_small as game
 
 
-logging.basicConfig(
-    filename='logs/log_{}.txt'.format(datetime.now().strftime('%y%m%d')),
-    level=logging.INFO)
-
 mp.set_start_method('spawn', force=True)
+logging.basicConfig(filename='logs/log_{}.txt'.format(datetime.now().strftime('%y%m%d')),
+                    level=logging.INFO)
 
 # Game
 BOARD_SIZE = game.Return_BoardParams()[0]
@@ -74,56 +72,6 @@ result = {'Black': 0, 'White': 0, 'Draw': 0}
 if USE_TENSORBOARD:
     from tensorboardX import SummaryWriter
     writer = SummaryWriter()
-
-# Initialize agent & model
-agent = agents.ZeroAgent(BOARD_SIZE,
-                         N_MCTS,
-                         IN_PLANES,
-                         noise=True)
-agent.model = model.PVNet(N_BLOCKS,
-                          IN_PLANES,
-                          OUT_PLANES,
-                          BOARD_SIZE).to(device)
-agent.model.share_memory()
-
-no_decay = ['bn', 'bias']
-model_parameters = [
-    {'params': [p for n, p in agent.model.named_parameters() if not any(
-        nd in n for nd in no_decay)], 'weight_decay': L2},
-    {'params': [p for n, p in agent.model.named_parameters() if any(
-        nd in n for nd in no_decay)], 'weight_decay': 0.0}
-]
-optimizer = optim.SGD(model_parameters, momentum=0.9, lr=LR)
-scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, TOTAL_ITER)
-# optimizer = optim.Adam(Agent.model.parameters(), lr=LR, eps=1e-6)
-
-logging.info(
-    '\nCUDA: {}'
-    '\nAGENT: {}'
-    '\nMODEL: {}'
-    '\nBOARD_SIZE: {}'
-    '\nN_MCTS: {}'
-    '\nTAU_THRES: {}'
-    '\nN_BLOCKS: {}'
-    '\nIN_PLANES: {}'
-    '\nOUT_PLANES: {}'
-    '\nMEMORY_SIZE: {}'
-    '\nBATCH_SIZE: {}'
-    '\nLR: {}'
-    '\nL2: {}'.format(
-        use_cuda,
-        type(agent).__name__,
-        type(agent.model).__name__,
-        BOARD_SIZE,
-        N_MCTS,
-        TAU_THRES,
-        N_BLOCKS,
-        IN_PLANES,
-        OUT_PLANES,
-        MEMORY_SIZE,
-        BATCH_SIZE,
-        LR,
-        L2))
 
 
 def self_play(agent, cur_memory, rank=0):
@@ -367,6 +315,56 @@ def reset_iter(result):
 
 
 def main():
+    # Initialize agent & model
+    agent = agents.ZeroAgent(BOARD_SIZE,
+                             N_MCTS,
+                             IN_PLANES,
+                             noise=True)
+    agent.model = model.PVNet(N_BLOCKS,
+                              IN_PLANES,
+                              OUT_PLANES,
+                              BOARD_SIZE).to(device)
+    agent.model.share_memory()
+
+    no_decay = ['bn', 'bias']
+    model_parameters = [
+        {'params': [p for n, p in agent.model.named_parameters() if not any(
+            nd in n for nd in no_decay)], 'weight_decay': L2},
+        {'params': [p for n, p in agent.model.named_parameters() if any(
+            nd in n for nd in no_decay)], 'weight_decay': 0.0}
+    ]
+    optimizer = optim.SGD(model_parameters, momentum=0.9, lr=LR)
+    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, TOTAL_ITER)
+    # optimizer = optim.Adam(Agent.model.parameters(), lr=LR, eps=1e-6)
+
+    logging.info(
+        '\nCUDA: {}'
+        '\nAGENT: {}'
+        '\nMODEL: {}'
+        '\nBOARD_SIZE: {}'
+        '\nN_MCTS: {}'
+        '\nTAU_THRES: {}'
+        '\nN_BLOCKS: {}'
+        '\nIN_PLANES: {}'
+        '\nOUT_PLANES: {}'
+        '\nMEMORY_SIZE: {}'
+        '\nBATCH_SIZE: {}'
+        '\nLR: {}'
+        '\nL2: {}'.format(
+            use_cuda,
+            type(agent).__name__,
+            type(agent.model).__name__,
+            BOARD_SIZE,
+            N_MCTS,
+            TAU_THRES,
+            N_BLOCKS,
+            IN_PLANES,
+            OUT_PLANES,
+            MEMORY_SIZE,
+            BATCH_SIZE,
+            LR,
+            L2))
+
     # ====================== self-play & training ====================== #
     model_path = None
     if model_path is not None:
