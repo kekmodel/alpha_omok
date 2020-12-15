@@ -1,4 +1,4 @@
-# Alpha-Omok
+# Alpha-Omok-parallel
 
 This is a project of [Reinforcement Learning KR group](https://www.facebook.com/groups/ReinforcementLearningKR/).
 
