@@ -1,11 +1,14 @@
 import logging
 import pickle
 import random
+import time
+from concurrent import futures
 from collections import deque
 from datetime import datetime
 
 import numpy as np
 import torch
+import torch.multiprocessing as mp
 import torch.optim as optim
 from torch.nn import functional as F
 from torch.utils.data import DataLoader
@@ -22,6 +25,8 @@ logging.basicConfig(
     filename='logs/log_{}.txt'.format(datetime.now().strftime('%y%m%d')),
     level=logging.INFO)
 
+mp.set_start_method('spawn', force=True)
+
 # Game
 BOARD_SIZE = game.Return_BoardParams()[0]
 N_MCTS = 200
@@ -35,10 +40,10 @@ IN_PLANES = 5  # history * 2 + 1
 OUT_PLANES = 256
 
 # Training
-USE_TENSORBOARD = True
+USE_TENSORBOARD = False
 # N_SELFPLAY = 100
 TOTAL_ITER = 1000
-MEMORY_SIZE = 4000
+MEMORY_SIZE = 10
 N_EPOCHS = 1
 BATCH_SIZE = 32
 LR = 6e-4
@@ -56,15 +61,13 @@ print('cuda:', use_cuda)
 np.set_printoptions(suppress=True)
 
 # Set random seeds
-random.seed(SEED)
-np.random.seed(SEED)
-torch.manual_seed(SEED)
-if use_cuda:
-    torch.cuda.manual_seed_all(SEED)
+# random.seed(SEED)
+# np.random.seed(SEED)
+# torch.manual_seed(SEED)
+# if use_cuda:
+#     torch.cuda.manual_seed_all(SEED)
 
 # Global variables
-rep_memory = []
-cur_memory = deque()
 step = 0
 start_iter = 0
 total_epoch = 0
@@ -82,6 +85,8 @@ agent.model = model.PVNet(N_BLOCKS,
                           IN_PLANES,
                           OUT_PLANES,
                           BOARD_SIZE).to(device)
+agent.model.share_memory()
+
 no_decay = ['bn', 'bias']
 model_parameters = [
     {'params': [p for n, p in agent.model.named_parameters() if not any(
@@ -128,7 +133,7 @@ logging.info(
         L2))
 
 
-def self_play(agent, cur_memory, rep_memory):
+def self_play(agent, cur_memory, rank=0):
     agent.model.eval()
     state_black = deque()
     state_white = deque()
@@ -148,7 +153,7 @@ def self_play(agent, cur_memory, rep_memory):
         action_index = None
 
         while win_index == 0:
-            if PRINT_SELFPLAY:
+            if PRINT_SELFPLAY and rank == 0:
                 utils.render_str(board, BOARD_SIZE, action_index)
 
             # ====================== start MCTS ============================ #
@@ -158,7 +163,7 @@ def self_play(agent, cur_memory, rep_memory):
             else:
                 tau = 0
 
-            pi = agent.get_pi(root_id, tau)
+            pi = agent.get_pi(root_id, tau, rank)
 
             # ===================== collect samples ======================== #
 
@@ -178,7 +183,7 @@ def self_play(agent, cur_memory, rep_memory):
 
             # ====================== print evaluation ====================== #
 
-            if PRINT_SELFPLAY:
+            if PRINT_SELFPLAY and rank == 0:
                 with torch.no_grad():
                     state_input = torch.tensor([state]).to(device).float()
                     p, v = agent.model(state_input)
@@ -230,7 +235,7 @@ def self_play(agent, cur_memory, rep_memory):
 
             # =========================  result  =========================== #
 
-                if PRINT_SELFPLAY:
+                if PRINT_SELFPLAY and rank == 0:
                     utils.render_str(board, BOARD_SIZE, action_index)
 
                     bw, ww, dr = result['Black'], result['White'], \
@@ -249,8 +254,7 @@ def self_play(agent, cur_memory, rep_memory):
                 episode += 1
                 agent.reset()
                 if len(cur_memory) >= MEMORY_SIZE:
-                    rep_memory.extend(utils.augment_dataset(cur_memory, BOARD_SIZE))
-                    return
+                    return utils.augment_dataset(cur_memory, BOARD_SIZE)
 
 
 def train(agent, rep_memory, optimizer, scheduler):
@@ -313,33 +317,33 @@ def train(agent, rep_memory, optimizer, scheduler):
 
         if PRINT_SELFPLAY:
             print('{:4} Step Loss: {:.4f}   '
-                    'Loss V: {:.4f}   '
-                    'Loss P: {:.4f}'.format(step,
-                                            loss.item(),
-                                            v_loss.item(),
-                                            p_loss.item()))
+                  'Loss V: {:.4f}   '
+                  'Loss P: {:.4f}'.format(step,
+                                          loss.item(),
+                                          v_loss.item(),
+                                          p_loss.item()))
     scheduler.step()
     total_epoch += 1
 
     if PRINT_SELFPLAY:
         print('-' * 58)
         print('{:2} Epoch Loss: {:.4f}   '
-                'Loss V: {:.4f}   '
-                'Loss P: {:.4f}'.format(total_epoch,
-                                        np.mean(loss_all),
-                                        np.mean(loss_v),
-                                        np.mean(loss_p)))
+              'Loss V: {:.4f}   '
+              'Loss P: {:.4f}'.format(total_epoch,
+                                      np.mean(loss_all),
+                                      np.mean(loss_v),
+                                      np.mean(loss_p)))
     logging.info('{:2} Epoch Loss: {:.4f}   '
-                    'Loss_V: {:.4f}   '
-                    'Loss_P: {:.4f}'.format(total_epoch,
-                                            np.mean(loss_all),
-                                            np.mean(loss_v),
-                                            np.mean(loss_p)))
+                 'Loss_V: {:.4f}   '
+                 'Loss_P: {:.4f}'.format(total_epoch,
+                                         np.mean(loss_all),
+                                         np.mean(loss_v),
+                                         np.mean(loss_p)))
 
 
 def save_model(agent, datetime, n_iter, step):
     torch.save(agent.model.state_dict(),
-        'data/{}_{}_{}_step_model.pickle'.format(datetime, n_iter, step))
+               'data/{}_{}_{}_step_model.pickle'.format(datetime, n_iter, step))
 
 
 def save_dataset(memory, datetime, n_iter, step):
@@ -364,20 +368,18 @@ def load_data(agent, rep_memory, model_path, dataset_path):
             rep_memory = pickle.load(f)
 
 
-def reset_iter(result, cur_memory, rep_memory):
+def reset_iter(result):
     result['Black'] = 0
     result['White'] = 0
     result['Draw'] = 0
-    cur_memory.clear()
-    rep_memory.clear()
+    # cur_memory.clear()
+    # rep_memory.clear()
 
 
 def main():
     # ====================== self-play & training ====================== #
     model_path = None
     dataset_path = None
-    if model_path is not None:
-        load_data(agent, rep_memory, model_path, dataset_path)
 
     for n_iter in range(start_iter, TOTAL_ITER):
         print('=' * 58)
@@ -388,15 +390,22 @@ def main():
         logging.info(' ' * 20 + "  {:2} Iteration  ".format(n_iter) + ' ' * 20)
         logging.info('=' * 58)
         datetime_now = datetime.now().strftime('%y%m%d')
+        train_memory = []
+        cur_memory = deque()
+        if model_path is not None:
+            load_data(agent, train_memory, model_path, dataset_path)
 
-        self_play(agent, cur_memory, rep_memory)
-    
-        train(agent, rep_memory, optimizer, scheduler)
+        with futures.ProcessPoolExecutor(max_workers=4) as executor:
+            fs = [executor.submit(self_play, agent, cur_memory, i) for i in range(4)]
+            for f in futures.as_completed(fs):
+                train_memory.extend(f.result())
+
+        train(agent, train_memory, optimizer, scheduler)
 
         save_model(agent, datetime_now, n_iter, step)
-        save_dataset(rep_memory, datetime_now, n_iter, step)
-        
-        reset_iter(result, cur_memory, rep_memory)
+        save_dataset(train_memory, datetime_now, n_iter, step)
+
+        reset_iter(result)
 
 
 if __name__ == '__main__':

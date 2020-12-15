@@ -57,7 +57,8 @@ class ZeroAgent(Agent):
         self.tree.clear()
         self.is_real_root = True
 
-    def get_pi(self, root_id, tau):
+    def get_pi(self, root_id, tau, rank):
+        self.rank = rank
         self._init_mcts(root_id)
         self._mcts(self.root_id)
 
@@ -112,7 +113,7 @@ class ZeroAgent(Agent):
 
         for i in range(num_mcts):
 
-            if PRINT_MCTS:
+            if PRINT_MCTS and self.rank == 0:
                 sys.stdout.write('simulation: {}\r'.format(i + 1))
                 sys.stdout.flush()
 
@@ -129,7 +130,7 @@ class ZeroAgent(Agent):
 
         finish = time.time() - start
         if PRINT_MCTS:
-            print("{} simulations end ({:0.0f}s)".format(i + 1, finish))
+            print("rank-{}: {} simulations end ({:0.0f}s)".format(self.rank, i + 1, finish))
 
     def _selection(self, root_id):
         node_id = root_id
@@ -192,7 +193,7 @@ class ZeroAgent(Agent):
                 # root node noise
                 if leaf_id == self.root_id:
                     noise_probs = np.random.dirichlet(
-                        self.alpha * np.ones(len(actions)))                    
+                        self.alpha * np.ones(len(actions)))
 
             for i, action_index in enumerate(actions):
                 child_id = leaf_id + (action_index,)
@@ -260,7 +261,7 @@ class ZeroAgent(Agent):
         return p, v
 
 
-class PUCTAgent(Agent):                                                        
+class PUCTAgent(Agent):
     def __init__(self, board_size, num_mcts):
         super(PUCTAgent, self).__init__(board_size)
         self.board_size = board_size
