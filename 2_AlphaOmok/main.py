@@ -83,7 +83,7 @@ def self_play(agent, cur_memory, rank=0):
     episode = 0
     while True:
         if (episode + 1) % 10 == 0:
-            logging.info('Playing Episode {:3}'.format(episode + 1))
+            logging.info('rank-{}: Playing Episode {:3}'.format(rank, episode + 1))
 
         env = game.GameState('text')
         board = np.zeros((BOARD_SIZE, BOARD_SIZE), 'float')
