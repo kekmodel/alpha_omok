@@ -18,7 +18,7 @@ import utils
 import agents
 
 # env_small: 9x9, env_regular: 15x15
-from env import env_regular as game
+from env import env_small as game
 
 
 mp.set_start_method('spawn', force=True)
@@ -286,11 +286,11 @@ def save_model(agent, optimizer, scheduler, datetime, n_iter, step):
     tar = {'state_dict': agent.model.state_dict(),
            'optimizer': optimizer.state_dict(),
            'scheduler': scheduler.state_dict()}
-    torch.save(tar, 'data/regular/{}_{}_{}_step_model.pickle'.format(datetime, n_iter, step))
+    torch.save(tar, 'data/small/{}_{}_{}_step_model.pickle'.format(datetime, n_iter, step))
 
 
 def save_dataset(memory, datetime, n_iter, step):
-    with open('data/regular/{}_{}_{}_step_dataset.pickle'.format(datetime, n_iter, step), 'wb') as f:
+    with open('data/small/{}_{}_{}_step_dataset.pickle'.format(datetime, n_iter, step), 'wb') as f:
         pickle.dump(memory, f, pickle.HIGHEST_PROTOCOL)
 
 
@@ -347,7 +347,7 @@ def main():
         f'\nL2: {L2}')
 
     # ====================== self-play & training ====================== #
-    model_path = None
+    model_path = './data/201215_11_12099_step_model.pickle'
     if model_path is not None:
         load_model(agent, optimizer, scheduler, model_path)
 
